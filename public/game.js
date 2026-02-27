@@ -194,6 +194,18 @@ function drawTouchControls() {
   ctx.globalAlpha = 1;
 }
 
+// ─── Head images ──────────────────────────────────────────────────────────────
+const HEAD_FILES = ['Boris', 'Filipa', 'Frank', 'Simon', 'Vincent'];
+const headImages = [];
+let imagesLoaded = 0;
+
+HEAD_FILES.forEach((name, i) => {
+  const img = new Image();
+  img.onload = () => { imagesLoaded++; };
+  img.src = `heads/${name}.jpeg`;
+  headImages.push({ img, name });
+});
+
 // ─── Boot ─────────────────────────────────────────────────────────────────────
 stars      = [];
 asteroids  = [];
@@ -260,10 +272,11 @@ function makeAsteroid(x, y, size, col) {
     const len = r * (0.68 + Math.random() * 0.32);
     return [Math.cos(ang) * len, Math.sin(ang) * len];
   });
+  const headIdx = Math.floor(Math.random() * headImages.length);
   return { x, y, vx: Math.cos(a) * spd, vy: Math.sin(a) * spd,
            rot: Math.random() * Math.PI * 2,
            rotSpd: (Math.random() - 0.5) * 0.045,
-           r, size, col, verts };
+           r, size, col, verts, headIdx };
 }
 
 function randColor() { return COLORS[Math.floor(Math.random() * COLORS.length)]; }
@@ -603,21 +616,52 @@ function drawShip() {
   ctx.restore();
 }
 
-// ── Asteroids ─────────────────────────────────────────────────────────────────
+// ── Heads (asteroids) ─────────────────────────────────────────────────────────
 function drawAsteroid(a) {
+  const head = headImages[a.headIdx];
+  const r    = a.r;
+
   ctx.save();
   ctx.translate(a.x, a.y);
   ctx.rotate(a.rot);
-  ctx.shadowColor = a.col.stroke;
-  ctx.shadowBlur  = 12;
+
+  // Clip to circle and draw photo
   ctx.beginPath();
-  a.verts.forEach(([vx, vy], i) => i === 0 ? ctx.moveTo(vx, vy) : ctx.lineTo(vx, vy));
-  ctx.closePath();
-  ctx.fillStyle   = a.col.fill;
+  ctx.arc(0, 0, r, 0, Math.PI * 2);
+  ctx.clip();
+
+  if (head && head.img.complete && head.img.naturalWidth > 0) {
+    ctx.drawImage(head.img, -r, -r, r * 2, r * 2);
+  } else {
+    // Fallback while loading
+    ctx.fillStyle = a.col.fill;
+    ctx.fill();
+  }
+
+  ctx.restore();
+
+  // Glowing coloured border (drawn outside clip so it sits on top)
+  ctx.save();
+  ctx.translate(a.x, a.y);
+  ctx.shadowColor = a.col.stroke;
+  ctx.shadowBlur  = 14;
   ctx.strokeStyle = a.col.stroke;
-  ctx.lineWidth   = 2;
-  ctx.fill();
+  ctx.lineWidth   = a.size === 'big' ? 3.5 : a.size === 'mid' ? 2.5 : 2;
+  ctx.beginPath();
+  ctx.arc(0, 0, r, 0, Math.PI * 2);
   ctx.stroke();
+
+  // Name label on large heads only
+  if (a.size === 'big' && head) {
+    ctx.shadowBlur  = 6;
+    ctx.shadowColor = '#000';
+    ctx.fillStyle   = '#ffffff';
+    ctx.font        = `bold ${Math.max(10, Math.round(r * 0.28))}px "Courier New", monospace`;
+    ctx.textAlign   = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(head.name.toUpperCase(), 0, r + 14);
+  }
+
   ctx.restore();
 }
 
