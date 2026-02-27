@@ -421,6 +421,13 @@ function update(dtSec, dt) {
   asteroids = asteroids.filter((_, i) => !deadRocks.has(i));
   asteroids.push(...newRocks);
 
+  // All heads cleared — start next round immediately
+  if (asteroids.length === 0) {
+    phase      = 'roundOver';
+    phaseTimer = ROUND_END_DELAY;
+    return;
+  }
+
   // Ship vs asteroids
   if (ship.invSecs <= 0) {
     for (const a of asteroids) {
