@@ -50,14 +50,54 @@ let phaseTimer;
 let score, lives, round, speedMult, timeLeft;
 let ship, asteroids, bullets, particles, stars;
 let shootCd = 0;
-let deadShip = null; // position of ship when it died (for respawn flash)
+let deadShip = null;
+
+// ─── High Score state ─────────────────────────────────────────────────────────
+let highScores      = [];
+let initialsLetters = ['A', 'A', 'A'];
+let initialsSlot    = 0;
+const ALPHABET      = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+const initialsZones = {};
+
+function mobileSizeMult() {
+  return navigator.maxTouchPoints > 0 ? 0.75 : 1.0;
+}
+async function fetchHighScores() {
+  try { highScores = await (await fetch('/api/scores')).json(); } catch(e) { highScores = []; }
+}
+async function submitHighScore(name, sc, rnd) {
+  try { highScores = await (await fetch('/api/scores', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name, score: sc, round: rnd }) })).json(); } catch(e) {}
+}
+function qualifiesForHighScore(s) {
+  if (s <= 0) return false;
+  if (highScores.length < 10) return true;
+  return s > highScores[highScores.length - 1].score;
+}
+function cycleInitial(dir) {
+  const idx = ALPHABET.indexOf(initialsLetters[initialsSlot]);
+  initialsLetters[initialsSlot] = ALPHABET[(idx + dir + 26) % 26];
+}
+async function confirmInitials() {
+  await submitHighScore(initialsLetters.join(''), score, round);
+  initialsLetters = ['A','A','A'];
+  initialsSlot = 0;
+  phase = 'title';
+}
 
 // ─── Input ────────────────────────────────────────────────────────────────────
 const keys = {};
 window.addEventListener('keydown', e => {
-  keys[e.code] = true;
-  if (['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.code))
+  if (['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Enter'].includes(e.code))
     e.preventDefault();
+  if (phase === 'enterInitials') {
+    if (e.code === 'ArrowUp')                      cycleInitial(1);
+    else if (e.code === 'ArrowDown')               cycleInitial(-1);
+    else if (e.code === 'ArrowRight')              initialsSlot = Math.min(2, initialsSlot + 1);
+    else if (e.code === 'ArrowLeft')               initialsSlot = Math.max(0, initialsSlot - 1);
+    else if (e.code === 'Enter' || e.code === 'Space') confirmInitials();
+    return;
+  }
+  keys[e.code] = true;
   if (e.code === 'Space' && (phase === 'title' || phase === 'gameOver'))
     startGame();
 });
@@ -145,7 +185,7 @@ canvas.addEventListener('touchcancel', releaseTouches, { passive: false });
 
 function drawTouchControls() {
   if (!('ontouchstart' in window) && !navigator.maxTouchPoints) return;
-  if (phase === 'title' || phase === 'gameOver') return;
+  if (phase === 'title' || phase === 'gameOver' || phase === 'enterInitials') return;
 
   resolveBtnPositions();
   const R = btnRadius();
@@ -217,6 +257,7 @@ lives      = START_LIVES;
 round      = 1;
 ship       = dummyShip();
 generateStars();
+fetchHighScores();
 requestAnimationFrame(loop);
 
 // ─── Game flow ────────────────────────────────────────────────────────────────
@@ -263,7 +304,7 @@ function spawnBigAsteroid() {
 }
 
 function makeAsteroid(x, y, size, col) {
-  const r   = SIZES[size];
+  const r   = SIZES[size] * mobileSizeMult();
   const spd = BASE_SPD[size] * speedMult;
   const a   = Math.random() * Math.PI * 2;
   const n   = 8 + Math.floor(Math.random() * 5);
@@ -310,9 +351,16 @@ function update(dtSec, dt) {
   if (phase === 'dead') {
     phaseTimer -= dtSec;
     if (phaseTimer <= 0) {
-      if (lives <= 0) { phase = 'gameOver'; }
-      else {
-        ship  = makeShip(); // respawn ship only — asteroids and timer stay as-is
+      if (lives <= 0) {
+        if (qualifiesForHighScore(score)) {
+          initialsLetters = ['A','A','A'];
+          initialsSlot    = 0;
+          phase = 'enterInitials';
+        } else {
+          phase = 'gameOver';
+        }
+      } else {
+        ship  = makeShip();
         phase = 'playing';
       }
     }
@@ -510,9 +558,10 @@ function draw() {
 
   drawHUD();
 
-  if (phase === 'title')     drawTitle();
-  if (phase === 'roundOver') drawRoundOver();
-  if (phase === 'gameOver')  drawGameOver();
+  if (phase === 'title')          drawTitle();
+  if (phase === 'roundOver')      drawRoundOver();
+  if (phase === 'gameOver')       drawGameOver();
+  if (phase === 'enterInitials')  drawInitialsEntry();
 
   drawTouchControls();
 }
@@ -762,43 +811,28 @@ const isTouch = () => ('ontouchstart' in window) || navigator.maxTouchPoints > 0
 // ── Overlay screens ───────────────────────────────────────────────────────────
 function drawTitle() {
   const cx = canvas.width / 2;
-  const cy = canvas.height / 2;
   const f  = '"Courier New", monospace';
+  const topY = canvas.height * 0.12;
 
   ctx.save();
   ctx.textAlign = 'center';
 
-  // Title
-  ctx.font        = `bold 68px ${f}`;
-  ctx.fillStyle   = '#74B9FF';
-  ctx.shadowColor = '#74B9FF';
-  ctx.shadowBlur  = 35;
-  ctx.fillText('ASTROHEADS', cx, cy - 70);
+  ctx.font = `bold ${Math.min(68, canvas.width * 0.09)}px ${f}`;
+  ctx.fillStyle = '#74B9FF'; ctx.shadowColor = '#74B9FF'; ctx.shadowBlur = 35;
+  ctx.fillText('ASTROHEADS', cx, topY);
 
-  // Subtitle
-  ctx.font        = `22px ${f}`;
-  ctx.fillStyle   = '#ffffff';
-  ctx.shadowBlur  = 8;
-  ctx.fillText('5 LIVES  ·  60 SECONDS PER ROUND', cx, cy - 20);
+  ctx.font = `18px ${f}`; ctx.fillStyle = '#ffffff'; ctx.shadowBlur = 8;
+  ctx.fillText('5 LIVES  ·  60 SECONDS PER ROUND', cx, topY + 38);
+  ctx.font = `13px ${f}`; ctx.fillStyle = 'rgba(255,255,255,0.55)'; ctx.shadowBlur = 0;
+  ctx.fillText(isTouch() ? '◀ ▶ TURN   ▲ THRUST   ● FIRE' : '← → TURN   ↑ THRUST   SPACE SHOOT', cx, topY + 62);
 
-  ctx.font      = `16px ${f}`;
-  ctx.fillStyle = 'rgba(255,255,255,0.6)';
-  ctx.fillText(
-    isTouch()
-      ? '◀ ▶ TURN     ▲ THRUST     ● FIRE'
-      : '← → TURN     ↑ THRUST     SPACE SHOOT',
-    cx, cy + 18
-  );
+  drawHighScoreTable(cx, topY + 95);
 
-  // Blink prompt
   if (Math.floor(performance.now() / 520) % 2) {
-    ctx.font        = `bold 22px ${f}`;
-    ctx.fillStyle   = '#FDCB6E';
-    ctx.shadowColor = '#FDCB6E';
-    ctx.shadowBlur  = 16;
-    ctx.fillText(isTouch() ? 'TAP  TO  START' : 'PRESS  SPACE  TO  START', cx, cy + 80);
+    ctx.font = `bold 20px ${f}`; ctx.fillStyle = '#FDCB6E';
+    ctx.shadowColor = '#FDCB6E'; ctx.shadowBlur = 16;
+    ctx.fillText(isTouch() ? 'TAP  TO  START' : 'PRESS  SPACE  TO  START', cx, canvas.height * 0.92);
   }
-
   ctx.restore();
 }
 
@@ -853,5 +887,109 @@ function drawGameOver() {
     ctx.shadowBlur  = 14;
     ctx.fillText(isTouch() ? 'TAP  TO  PLAY  AGAIN' : 'PRESS  SPACE  TO  PLAY  AGAIN', cx, cy + 95);
   }
+  ctx.restore();
+}
+
+// ── High Score Table ──────────────────────────────────────────────────────────
+function drawHighScoreTable(cx, startY) {
+  const f = '"Courier New", monospace';
+  ctx.save();
+  ctx.textAlign = 'center';
+
+  ctx.font = `bold 15px ${f}`; ctx.fillStyle = '#FDCB6E';
+  ctx.shadowColor = '#FDCB6E'; ctx.shadowBlur = 10;
+  ctx.fillText('─── HIGH SCORES ───', cx, startY);
+
+  if (highScores.length === 0) {
+    ctx.font = `13px ${f}`; ctx.fillStyle = 'rgba(255,255,255,0.35)';
+    ctx.shadowBlur = 0; ctx.fillText('NO SCORES YET', cx, startY + 26);
+  } else {
+    highScores.forEach((s, i) => {
+      const y = startY + 24 + i * 22;
+      ctx.font = `${i === 0 ? 'bold ' : ''}14px ${f}`;
+      ctx.fillStyle = i === 0 ? '#FDCB6E' : i < 3 ? '#ffffff' : 'rgba(255,255,255,0.6)';
+      ctx.shadowColor = i === 0 ? '#FDCB6E' : 'transparent'; ctx.shadowBlur = i === 0 ? 8 : 0;
+      const rank = `${i+1}`.padStart(2,' ');
+      const sc   = `${s.score}`.padStart(7,' ');
+      ctx.fillText(`${rank}.  ${s.name}  ${sc}    RND ${s.round}`, cx, y);
+    });
+  }
+  ctx.restore();
+}
+
+// ── Initials Entry ────────────────────────────────────────────────────────────
+function drawInitialsEntry() {
+  const cx = canvas.width / 2;
+  const cy = canvas.height / 2;
+  const f  = '"Courier New", monospace';
+  const touch = isTouch();
+
+  ctx.fillStyle = 'rgba(0,0,0,0.82)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  ctx.save();
+  ctx.textAlign = 'center';
+
+  ctx.font = `bold 28px ${f}`; ctx.fillStyle = '#FDCB6E';
+  ctx.shadowColor = '#FDCB6E'; ctx.shadowBlur = 22;
+  ctx.fillText('★  NEW  HIGH  SCORE  ★', cx, cy - 130);
+
+  ctx.font = `18px ${f}`; ctx.fillStyle = '#ffffff'; ctx.shadowBlur = 6;
+  ctx.fillText(`SCORE: ${score}   ROUND: ${round}`, cx, cy - 95);
+
+  ctx.font = `12px ${f}`; ctx.fillStyle = 'rgba(255,255,255,0.5)'; ctx.shadowBlur = 0;
+  ctx.fillText(touch ? 'TAP ▲ ▼ TO CHANGE · TAP SLOT TO SELECT' : '▲▼ CHANGE   ◀▶ MOVE   ENTER TO SAVE', cx, cy - 68);
+
+  const slotW = 64, slotH = 76, gap = 18;
+  const totalW = 3 * slotW + 2 * gap;
+  const sx0 = cx - totalW / 2;
+  const slotTopY = cy - 50;
+
+  for (let i = 0; i < 3; i++) {
+    const sx     = sx0 + i * (slotW + gap);
+    const active = i === initialsSlot;
+    const arrowY = slotTopY - 28;
+    const letterY = slotTopY + slotH - 16;
+    const downY  = slotTopY + slotH + 26;
+
+    initialsZones[`up_${i}`]   = { x: sx, y: arrowY - 20, w: slotW, h: 36, action: () => { initialsSlot = i; cycleInitial(1); } };
+    initialsZones[`slot_${i}`] = { x: sx, y: slotTopY,    w: slotW, h: slotH, action: () => { initialsSlot = i; } };
+    initialsZones[`dn_${i}`]   = { x: sx, y: downY - 8,   w: slotW, h: 36, action: () => { initialsSlot = i; cycleInitial(-1); } };
+
+    ctx.font = `22px ${f}`;
+    ctx.fillStyle = active ? '#FDCB6E' : 'rgba(255,255,255,0.35)';
+    ctx.shadowColor = active ? '#FDCB6E' : 'transparent'; ctx.shadowBlur = active ? 10 : 0;
+    ctx.fillText('▲', sx + slotW / 2, arrowY);
+
+    ctx.strokeStyle = active ? '#FDCB6E' : 'rgba(255,255,255,0.25)';
+    ctx.lineWidth = active ? 2.5 : 1.5;
+    ctx.shadowColor = active ? '#FDCB6E' : 'transparent'; ctx.shadowBlur = active ? 18 : 0;
+    if (active) { ctx.fillStyle = 'rgba(253,203,110,0.08)'; ctx.fillRect(sx, slotTopY, slotW, slotH); }
+    ctx.strokeRect(sx, slotTopY, slotW, slotH);
+
+    const blink = active && Math.floor(performance.now() / 350) % 2 === 0;
+    ctx.font = `bold 50px ${f}`;
+    ctx.fillStyle = blink ? 'rgba(253,203,110,0.25)' : (active ? '#FDCB6E' : '#ffffff');
+    ctx.shadowColor = active ? '#FDCB6E' : 'rgba(255,255,255,0.2)'; ctx.shadowBlur = active ? 20 : 4;
+    ctx.fillText(initialsLetters[i], sx + slotW / 2, letterY);
+
+    ctx.font = `22px ${f}`;
+    ctx.fillStyle = active ? '#FDCB6E' : 'rgba(255,255,255,0.35)';
+    ctx.shadowColor = active ? '#FDCB6E' : 'transparent'; ctx.shadowBlur = active ? 10 : 0;
+    ctx.fillText('▼', sx + slotW / 2, downY);
+  }
+
+  const btnY = cy + 115;
+  initialsZones['confirm'] = { x: cx - 130, y: btnY - 28, w: 260, h: 50, action: confirmInitials };
+  if (Math.floor(performance.now() / 520) % 2) {
+    ctx.font = `bold 18px ${f}`; ctx.fillStyle = '#55EFC4';
+    ctx.shadowColor = '#55EFC4'; ctx.shadowBlur = 14;
+    ctx.fillText(touch ? 'TAP HERE TO SAVE' : 'PRESS  ENTER  TO  SAVE', cx, btnY);
+  }
+  if (touch) {
+    ctx.strokeStyle = 'rgba(85,239,196,0.35)'; ctx.lineWidth = 1.5; ctx.shadowBlur = 0;
+    ctx.strokeRect(cx - 130, btnY - 28, 260, 50);
+  }
+
   ctx.restore();
 }
