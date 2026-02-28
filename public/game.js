@@ -53,11 +53,9 @@ let shootCd = 0;
 let deadShip = null;
 
 // ─── High Score state ─────────────────────────────────────────────────────────
-let highScores      = [];
-let initialsLetters = ['A', 'A', 'A'];
-let initialsSlot    = 0;
-const ALPHABET      = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-const initialsZones = {};
+let highScores    = [];
+let typedInitials = '';    // what the player has typed so far (max 3 chars)
+let confirmZone   = null;  // canvas SAVE button hit-zone, updated each draw frame
 
 function mobileSizeMult() {
   return navigator.maxTouchPoints > 0 ? 0.75 : 1.0;
@@ -73,15 +71,58 @@ function qualifiesForHighScore(s) {
   if (highScores.length < 10) return true;
   return s > highScores[highScores.length - 1].score;
 }
-function cycleInitial(dir) {
-  const idx = ALPHABET.indexOf(initialsLetters[initialsSlot]);
-  initialsLetters[initialsSlot] = ALPHABET[(idx + dir + 26) % 26];
-}
 async function confirmInitials() {
-  await submitHighScore(initialsLetters.join(''), score, round);
-  initialsLetters = ['A','A','A'];
-  initialsSlot = 0;
+  if (typedInitials.length === 0) return;
+  const name = typedInitials.padEnd(3, 'A');
+  hideInitialsInput();
+  await submitHighScore(name, score, round);
   phase = 'title';
+}
+
+// ─── Initials HTML input (invisible overlay — captures keyboard on all devices)
+const initialsInput = document.createElement('input');
+initialsInput.type  = 'text';
+initialsInput.maxLength = 3;
+initialsInput.setAttribute('autocomplete',   'off');
+initialsInput.setAttribute('autocorrect',    'off');
+initialsInput.setAttribute('autocapitalize', 'characters');
+initialsInput.setAttribute('spellcheck',     'false');
+Object.assign(initialsInput.style, {
+  position:      'fixed',
+  top:           '0',
+  left:          '50%',
+  transform:     'translateX(-50%)',
+  width:         '1px',
+  height:        '1px',
+  opacity:       '0',
+  fontSize:      '16px',  // prevents iOS auto-zoom on focus
+  border:        'none',
+  outline:       'none',
+  background:    'transparent',
+  color:         'transparent',
+  zIndex:        '999',
+  pointerEvents: 'none',
+});
+document.body.appendChild(initialsInput);
+
+initialsInput.addEventListener('input', () => {
+  typedInitials = initialsInput.value.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 3);
+  initialsInput.value = typedInitials;
+});
+initialsInput.addEventListener('keydown', e => {
+  if (phase !== 'enterInitials') return;
+  if (e.key === 'Enter' && typedInitials.length > 0) { e.preventDefault(); confirmInitials(); }
+});
+
+function showInitialsInput() {
+  typedInitials = '';
+  initialsInput.value = '';
+  initialsInput.style.pointerEvents = 'auto';
+  initialsInput.focus();
+}
+function hideInitialsInput() {
+  initialsInput.style.pointerEvents = 'none';
+  initialsInput.blur();
 }
 
 // ─── Input ────────────────────────────────────────────────────────────────────
@@ -89,14 +130,7 @@ const keys = {};
 window.addEventListener('keydown', e => {
   if (['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Enter'].includes(e.code))
     e.preventDefault();
-  if (phase === 'enterInitials') {
-    if (e.code === 'ArrowUp')                      cycleInitial(1);
-    else if (e.code === 'ArrowDown')               cycleInitial(-1);
-    else if (e.code === 'ArrowRight')              initialsSlot = Math.min(2, initialsSlot + 1);
-    else if (e.code === 'ArrowLeft')               initialsSlot = Math.max(0, initialsSlot - 1);
-    else if (e.code === 'Enter' || e.code === 'Space') confirmInitials();
-    return;
-  }
+  if (phase === 'enterInitials') return; // initialsInput element handles all typing
   keys[e.code] = true;
   if (e.code === 'Space' && (phase === 'title' || phase === 'gameOver'))
     startGame();
@@ -148,6 +182,17 @@ canvas.addEventListener('touchstart', e => {
   for (const t of e.changedTouches) {
     // Title / game-over: any tap starts the game
     if (phase === 'title' || phase === 'gameOver') { startGame(); continue; }
+    if (phase === 'enterInitials') {
+      if (confirmZone &&
+          t.clientX >= confirmZone.x && t.clientX <= confirmZone.x + confirmZone.w &&
+          t.clientY >= confirmZone.y && t.clientY <= confirmZone.y + confirmZone.h) {
+        if (typedInitials.length > 0) confirmInitials();
+      } else {
+        initialsInput.style.pointerEvents = 'auto';
+        initialsInput.focus();
+      }
+      continue;
+    }
     const btn = btnAtPoint(t.clientX, t.clientY);
     if (btn) { activeTouches[t.identifier] = btn.id; keys[btn.key] = true; }
   }
@@ -340,7 +385,7 @@ function update(dtSec, dt) {
   // Particles always update
   updateParticles(dt);
 
-  if (phase === 'title' || phase === 'gameOver') return;
+  if (phase === 'title' || phase === 'gameOver' || phase === 'enterInitials') return;
 
   if (phase === 'roundOver') {
     phaseTimer -= dtSec;
@@ -353,9 +398,8 @@ function update(dtSec, dt) {
     if (phaseTimer <= 0) {
       if (lives <= 0) {
         if (qualifiesForHighScore(score)) {
-          initialsLetters = ['A','A','A'];
-          initialsSlot    = 0;
           phase = 'enterInitials';
+          showInitialsInput();
         } else {
           phase = 'gameOver';
         }
@@ -920,75 +964,104 @@ function drawHighScoreTable(cx, startY) {
 // ── Initials Entry ────────────────────────────────────────────────────────────
 function drawInitialsEntry() {
   const cx = canvas.width / 2;
-  const cy = canvas.height / 2;
   const f  = '"Courier New", monospace';
-  const touch = isTouch();
 
-  ctx.fillStyle = 'rgba(0,0,0,0.82)';
+  // Full-screen dark overlay
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = 'rgba(0,0,0,0.88)';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
   ctx.save();
   ctx.textAlign = 'center';
 
-  ctx.font = `bold 28px ${f}`; ctx.fillStyle = '#FDCB6E';
-  ctx.shadowColor = '#FDCB6E'; ctx.shadowBlur = 22;
-  ctx.fillText('★  NEW  HIGH  SCORE  ★', cx, cy - 130);
+  // Position UI in upper portion so mobile keyboard doesn't cover it
+  const topY  = canvas.height * 0.16;
+  const slotY = canvas.height * 0.36;
+  const btnY  = canvas.height * 0.60;
 
-  ctx.font = `18px ${f}`; ctx.fillStyle = '#ffffff'; ctx.shadowBlur = 6;
-  ctx.fillText(`SCORE: ${score}   ROUND: ${round}`, cx, cy - 95);
+  // Headline
+  ctx.font = `bold ${Math.min(26, canvas.width * 0.062)}px ${f}`;
+  ctx.fillStyle = '#FDCB6E'; ctx.shadowColor = '#FDCB6E'; ctx.shadowBlur = 22;
+  ctx.fillText('★  NEW  HIGH  SCORE  ★', cx, topY);
 
-  ctx.font = `12px ${f}`; ctx.fillStyle = 'rgba(255,255,255,0.5)'; ctx.shadowBlur = 0;
-  ctx.fillText(touch ? 'TAP ▲ ▼ TO CHANGE · TAP SLOT TO SELECT' : '▲▼ CHANGE   ◀▶ MOVE   ENTER TO SAVE', cx, cy - 68);
+  ctx.font = `${Math.min(18, canvas.width * 0.042)}px ${f}`;
+  ctx.fillStyle = '#ffffff'; ctx.shadowBlur = 6;
+  ctx.fillText(`SCORE: ${score}   ROUND: ${round}`, cx, topY + 36);
 
-  const slotW = 64, slotH = 76, gap = 18;
+  ctx.font = `${Math.min(13, canvas.width * 0.031)}px ${f}`;
+  ctx.fillStyle = 'rgba(255,255,255,0.5)'; ctx.shadowBlur = 0;
+  ctx.fillText(
+    isTouch() ? 'TAP SCREEN TO TYPE  ·  TAP SAVE WHEN DONE'
+              : 'TYPE YOUR 3 INITIALS  ·  PRESS ENTER TO SAVE',
+    cx, topY + 62
+  );
+
+  // ── 3 letter slots ──────────────────────────────────────────────────────────
+  const slotW  = Math.min(70, canvas.width * 0.15);
+  const slotH  = Math.round(slotW * 1.18);
+  const gap    = Math.round(slotW * 0.22);
   const totalW = 3 * slotW + 2 * gap;
-  const sx0 = cx - totalW / 2;
-  const slotTopY = cy - 50;
+  const sx0    = cx - totalW / 2;
 
   for (let i = 0; i < 3; i++) {
     const sx     = sx0 + i * (slotW + gap);
-    const active = i === initialsSlot;
-    const arrowY = slotTopY - 28;
-    const letterY = slotTopY + slotH - 16;
-    const downY  = slotTopY + slotH + 26;
+    const ch     = typedInitials[i] || '';
+    const active = (i === typedInitials.length) && typedInitials.length < 3;
+    const filled = i < typedInitials.length;
 
-    initialsZones[`up_${i}`]   = { x: sx, y: arrowY - 20, w: slotW, h: 36, action: () => { initialsSlot = i; cycleInitial(1); } };
-    initialsZones[`slot_${i}`] = { x: sx, y: slotTopY,    w: slotW, h: slotH, action: () => { initialsSlot = i; } };
-    initialsZones[`dn_${i}`]   = { x: sx, y: downY - 8,   w: slotW, h: 36, action: () => { initialsSlot = i; cycleInitial(-1); } };
+    // Active slot background
+    if (active) {
+      ctx.fillStyle = 'rgba(253,203,110,0.06)';
+      ctx.shadowBlur = 0;
+      ctx.fillRect(sx, slotY, slotW, slotH);
+    }
 
-    ctx.font = `22px ${f}`;
-    ctx.fillStyle = active ? '#FDCB6E' : 'rgba(255,255,255,0.35)';
-    ctx.shadowColor = active ? '#FDCB6E' : 'transparent'; ctx.shadowBlur = active ? 10 : 0;
-    ctx.fillText('▲', sx + slotW / 2, arrowY);
+    // Slot border
+    ctx.strokeStyle = active  ? '#FDCB6E'
+                    : filled  ? 'rgba(253,203,110,0.55)'
+                    :           'rgba(255,255,255,0.2)';
+    ctx.lineWidth   = active ? 2.5 : (filled ? 2 : 1.5);
+    ctx.shadowColor = active ? '#FDCB6E' : 'transparent';
+    ctx.shadowBlur  = active ? 16 : 0;
+    ctx.strokeRect(sx, slotY, slotW, slotH);
 
-    ctx.strokeStyle = active ? '#FDCB6E' : 'rgba(255,255,255,0.25)';
-    ctx.lineWidth = active ? 2.5 : 1.5;
-    ctx.shadowColor = active ? '#FDCB6E' : 'transparent'; ctx.shadowBlur = active ? 18 : 0;
-    if (active) { ctx.fillStyle = 'rgba(253,203,110,0.08)'; ctx.fillRect(sx, slotTopY, slotW, slotH); }
-    ctx.strokeRect(sx, slotTopY, slotW, slotH);
-
-    const blink = active && Math.floor(performance.now() / 350) % 2 === 0;
-    ctx.font = `bold 50px ${f}`;
-    ctx.fillStyle = blink ? 'rgba(253,203,110,0.25)' : (active ? '#FDCB6E' : '#ffffff');
-    ctx.shadowColor = active ? '#FDCB6E' : 'rgba(255,255,255,0.2)'; ctx.shadowBlur = active ? 20 : 4;
-    ctx.fillText(initialsLetters[i], sx + slotW / 2, letterY);
-
-    ctx.font = `22px ${f}`;
-    ctx.fillStyle = active ? '#FDCB6E' : 'rgba(255,255,255,0.35)';
-    ctx.shadowColor = active ? '#FDCB6E' : 'transparent'; ctx.shadowBlur = active ? 10 : 0;
-    ctx.fillText('▼', sx + slotW / 2, downY);
+    if (ch) {
+      // Typed letter
+      ctx.font        = `bold ${Math.round(slotH * 0.65)}px ${f}`;
+      ctx.fillStyle   = '#FDCB6E';
+      ctx.shadowColor = '#FDCB6E'; ctx.shadowBlur = 16;
+      ctx.fillText(ch, sx + slotW / 2, slotY + slotH * 0.82);
+    } else if (active) {
+      // Blinking cursor bar in empty active slot
+      if (Math.floor(performance.now() / 530) % 2) {
+        ctx.fillStyle   = 'rgba(253,203,110,0.75)';
+        ctx.shadowColor = '#FDCB6E'; ctx.shadowBlur = 8;
+        ctx.fillRect(sx + slotW * 0.28, slotY + slotH * 0.8, slotW * 0.44, 3);
+      }
+    }
   }
 
-  const btnY = cy + 115;
-  initialsZones['confirm'] = { x: cx - 130, y: btnY - 28, w: 260, h: 50, action: confirmInitials };
-  if (Math.floor(performance.now() / 520) % 2) {
-    ctx.font = `bold 18px ${f}`; ctx.fillStyle = '#55EFC4';
-    ctx.shadowColor = '#55EFC4'; ctx.shadowBlur = 14;
-    ctx.fillText(touch ? 'TAP HERE TO SAVE' : 'PRESS  ENTER  TO  SAVE', cx, btnY);
-  }
-  if (touch) {
-    ctx.strokeStyle = 'rgba(85,239,196,0.35)'; ctx.lineWidth = 1.5; ctx.shadowBlur = 0;
-    ctx.strokeRect(cx - 130, btnY - 28, 260, 50);
+  // ── SAVE button ─────────────────────────────────────────────────────────────
+  const canSave = typedInitials.length > 0;
+  const bw = Math.min(240, canvas.width * 0.52);
+  const bh = 52;
+  confirmZone = { x: cx - bw / 2, y: btnY - bh / 2, w: bw, h: bh };
+
+  ctx.shadowBlur  = canSave ? 14 : 0;
+  ctx.shadowColor = canSave ? 'rgba(85,239,196,0.5)' : 'transparent';
+  ctx.strokeStyle = canSave ? 'rgba(85,239,196,0.65)' : 'rgba(255,255,255,0.12)';
+  ctx.lineWidth   = canSave ? 2 : 1;
+  ctx.strokeRect(confirmZone.x, confirmZone.y, confirmZone.w, confirmZone.h);
+
+  ctx.font        = `bold ${Math.min(20, canvas.width * 0.045)}px ${f}`;
+  ctx.fillStyle   = canSave ? '#55EFC4' : 'rgba(255,255,255,0.22)';
+  ctx.shadowColor = canSave ? '#55EFC4' : 'transparent';
+  ctx.shadowBlur  = canSave ? 14 : 0;
+  ctx.fillText(isTouch() ? 'TAP  TO  SAVE' : 'PRESS  ENTER  TO  SAVE', cx, btnY + 8);
+
+  if (!isTouch() && typedInitials.length > 0) {
+    ctx.font = `11px ${f}`; ctx.fillStyle = 'rgba(255,255,255,0.28)'; ctx.shadowBlur = 0;
+    ctx.fillText('BACKSPACE  TO  DELETE', cx, btnY + bh / 2 + 20);
   }
 
   ctx.restore();
